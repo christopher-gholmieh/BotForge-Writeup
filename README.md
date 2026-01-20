@@ -868,5 +868,5 @@ $ sudo dpkg-reconfigure unattended-upgrades
 * ![Score Report P1](assets/score-report-1.png)
 * ![Score Report P2](assets/score-report-2.png)
 
-## Credit
-Thank you to Tirefire and the entire CyberPatriot community for assisting me crack the final few vulnerabilities.
+## Credits
+Thank you to network-duck, tirefire and the entire CyberPatriot community for assisting me crack the final few vulnerabilities.
